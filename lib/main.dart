@@ -2,6 +2,8 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,10 +50,47 @@ class _PolyautoControllerState extends State<PolyautoController>
   bool isConnected = false;
   String status = "Disconnected";
 
-
   final Set<String> _activeDirections = {};
 
   late AnimationController _blinkController;
+
+  // --- Customizable command mapping ---
+  Map<String, String> _directionCommand = {
+    'f': 'f', // Forward
+    'b': 'b', // Backward
+    'g': 'g', // Left
+    'l': 'l', // Right
+    's': 's', // Stop
+    'q': 'q', // Forward-Left
+    'e': 'e', // Forward-Right
+    'z': 'z', // Backward-Left
+    'c': 'c', // Backward-Right
+  };
+  // ------------------------------------
+
+  // Load saved controls from SharedPreferences
+  Future<void> _loadSavedControls() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _directionCommand = {
+        'f': prefs.getString('control_f') ?? 'f',
+        'b': prefs.getString('control_b') ?? 'b',
+        'g': prefs.getString('control_g') ?? 'g',
+        'l': prefs.getString('control_l') ?? 'l',
+        's': prefs.getString('control_s') ?? 's',
+        'q': prefs.getString('control_q') ?? 'q',
+        'e': prefs.getString('control_e') ?? 'e',
+        'z': prefs.getString('control_z') ?? 'z',
+        'c': prefs.getString('control_c') ?? 'c',
+      };
+    });
+  }
+
+  // Save control changes to SharedPreferences
+  Future<void> _saveControlChange(String dirKey, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('control_$dirKey', value);
+  }
 
   @override
   void initState() {
@@ -62,6 +101,7 @@ class _PolyautoControllerState extends State<PolyautoController>
       lowerBound: 0.0,
       upperBound: 1.0,
     )..repeat(reverse: true);
+    _loadSavedControls(); // Load saved controls on app start
   }
 
   @override
@@ -84,7 +124,39 @@ class _PolyautoControllerState extends State<PolyautoController>
     return null;
   }
 
+  // Permission check and request (fix for Android 6+ and 12+)
+  Future<bool> _checkBluetoothPermissions() async {
+    // List all relevant permissions for all Android versions
+    final permissions = <Permission>[
+      Permission.bluetooth,
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.locationWhenInUse,
+    ];
+    Map<Permission, PermissionStatus> statuses = await permissions.request();
+
+    for (final status in statuses.values) {
+      if (!status.isGranted) return false;
+    }
+    return true;
+  }
+
   Future<void> _selectAndConnectDevice() async {
+    // Request runtime permissions first
+    if (!await _checkBluetoothPermissions()) {
+      setState(() {
+        isConnecting = false;
+        status = "Permissions required";
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bluetooth and Location permissions are required!'))
+      );
+      return;
+    }
+
+    // Optionally prompt to enable Bluetooth if off
+    await FlutterBluetoothSerial.instance.requestEnable();
+
     setState(() {
       isConnecting = true;
       status = "Scanning...";
@@ -168,8 +240,9 @@ class _PolyautoControllerState extends State<PolyautoController>
     });
   }
 
-  void _sendCommand(String cmd) {
+  void _sendCommand(String dirKey) {
     if (isConnected && connection != null) {
+      final cmd = _directionCommand[dirKey] ?? dirKey;
       connection!.output.add(Uint8List.fromList(cmd.codeUnits));
       connection!.output.allSent;
     }
@@ -207,6 +280,136 @@ class _PolyautoControllerState extends State<PolyautoController>
     );
   }
 
+  /// Dialog for customizing controls - FIXED VERSION
+  void _showCustomizeControlsDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(20), // Add padding around dialog
+        child: Container(
+          width: double.maxFinite,
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.7, // Limit height to 70%
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(4),
+                    topRight: Radius.circular(4),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      "Customize Controls",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Content
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Change which character is sent for each direction.\n"
+                            "For example: set Forward to 'T' to send 'T' for Forward.",
+                        style: TextStyle(fontSize: 14, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 16),
+                      ..._directionCommand.entries.map((e) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _buildCommandField(e.key, e.value),
+                      )).toList(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCommandField(String dirKey, String value) {
+    String label;
+    switch (dirKey) {
+      case 'f': label = 'Forward'; break;
+      case 'b': label = 'Backward'; break;
+      case 'g': label = 'Left'; break;
+      case 'l': label = 'Right'; break;
+      case 's': label = 'Stop'; break;
+      case 'q': label = 'Forward-Left'; break;
+      case 'e': label = 'Forward-Right'; break;
+      case 'z': label = 'Backward-Left'; break;
+      case 'c': label = 'Backward-Right'; break;
+      default: label = dirKey; break;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 60,
+            child: TextFormField(
+              initialValue: value,
+              maxLength: 1,
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                counterText: '',
+                border: OutlineInputBorder(),
+                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+              ),
+              onChanged: (val) {
+                if (val.isNotEmpty) {
+                  setState(() {
+                    _directionCommand[dirKey] = val[0];
+                  });
+                  _saveControlChange(dirKey, val[0]); // Save immediately when changed
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _onDirectionPress(String dir) {
     if (_activeDirections.add(dir)) {
       setState(() {});
@@ -224,9 +427,9 @@ class _PolyautoControllerState extends State<PolyautoController>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      resizeToAvoidBottomInset: false, // This prevents UI compression when keyboard opens
       body: Stack(
         children: [
-
           Positioned.fill(
             child: Center(
               child: Opacity(
@@ -334,7 +537,6 @@ class _PolyautoControllerState extends State<PolyautoController>
       ),
       child: Row(
         children: [
-
           GestureDetector(
             onTapDown: (_) => _onDirectionPress('s'),
             onTapUp: (_) => _onDirectionRelease('s'),
@@ -356,10 +558,7 @@ class _PolyautoControllerState extends State<PolyautoController>
               child: const Icon(Icons.stop, color: Colors.white, size: 20),
             ),
           ),
-
           const SizedBox(width: 12),
-
-
           Text(
             "POLYAUTO",
             style: TextStyle(
@@ -377,10 +576,7 @@ class _PolyautoControllerState extends State<PolyautoController>
               ],
             ),
           ),
-
           const SizedBox(width: 10),
-
-
           Row(
             children: [
               Icon(
@@ -399,9 +595,7 @@ class _PolyautoControllerState extends State<PolyautoController>
               ),
             ],
           ),
-
           const Spacer(),
-
           // Speed control!
           Row(
             children: [
@@ -439,10 +633,7 @@ class _PolyautoControllerState extends State<PolyautoController>
               ),
             ],
           ),
-
           const SizedBox(width: 16),
-
-
           GestureDetector(
             onTap: _showSettingsDialog,
             child: Container(
@@ -453,6 +644,22 @@ class _PolyautoControllerState extends State<PolyautoController>
               ),
               child: const Icon(
                 Icons.settings,
+                color: Colors.black,
+                size: 24,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _showCustomizeControlsDialog,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: const Icon(
+                Icons.edit, // You can use Icons.tune, Icons.gamepad, etc
                 color: Colors.black,
                 size: 24,
               ),
@@ -525,38 +732,38 @@ class _PolyautoControllerState extends State<PolyautoController>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Expanded(
-                child: Container(
-                  width: size,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                    border: Border.all(color: Colors.black, width: 2),
-                  ),
-                  child: Center(
-                    child: Icon(icon, color: Colors.black, size: 44),
-                  ),
+          Expanded(
+          child: Container(
+          width: size,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
                 ),
-              ),
-              if (label != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ]
-            ],
+              ],
+              border: Border.all(color: Colors.black, width: 2),
+            ),
+            child: Center(
+              child: Icon(icon, color: Colors.black, size: 44),
+            ),
           ),
+        ),
+        if (label != null) ...[
+        const SizedBox(height: 8),
+        Text(
+        label,
+        style: const TextStyle(
+        color: Colors.black,
+        fontWeight: FontWeight.bold,
+        ),
+        ),
+
+        ],
+        ]),
         );
       },
     );
