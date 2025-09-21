@@ -54,21 +54,21 @@ class _PolyautoControllerState extends State<PolyautoController>
 
   late AnimationController _blinkController;
 
-  // --- Customizable command mapping ---
+  // --- Customizable command mapping (keep diagonals for visual!) ---
   Map<String, String> _directionCommand = {
     'f': 'f', // Forward
     'b': 'b', // Backward
     'g': 'g', // Left
     'l': 'l', // Right
     's': 's', // Stop
-    'q': 'q', // Forward-Left
-    'e': 'e', // Forward-Right
-    'z': 'z', // Backward-Left
-    'c': 'c', // Backward-Right
+    'q': 'q', // Forward-Left (visual only)
+    'e': 'e', // Forward-Right (visual only)
+    'z': 'z', // Backward-Left (visual only)
+    'c': 'c', // Backward-Right (visual only)
   };
-  // ------------------------------------
+  // --------------------------------------------------------
 
-  // Load saved controls from SharedPreferences
+  // Load saved controls from SharedPreferences (all directions)
   Future<void> _loadSavedControls() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -86,7 +86,7 @@ class _PolyautoControllerState extends State<PolyautoController>
     });
   }
 
-  // Save control changes to SharedPreferences
+  // Save control changes to SharedPreferences (all directions)
   Future<void> _saveControlChange(String dirKey, String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('control_$dirKey', value);
@@ -111,6 +111,7 @@ class _PolyautoControllerState extends State<PolyautoController>
     super.dispose();
   }
 
+  // Blink logic for all directions (including diagonals)
   String? get _currentBlinkDirection {
     if (_activeDirections.contains('f') && _activeDirections.contains('g')) return 'q';
     if (_activeDirections.contains('f') && _activeDirections.contains('l')) return 'e';
@@ -126,7 +127,6 @@ class _PolyautoControllerState extends State<PolyautoController>
 
   // Permission check and request (fix for Android 6+ and 12+)
   Future<bool> _checkBluetoothPermissions() async {
-    // List all relevant permissions for all Android versions
     final permissions = <Permission>[
       Permission.bluetooth,
       Permission.bluetoothScan,
@@ -142,7 +142,6 @@ class _PolyautoControllerState extends State<PolyautoController>
   }
 
   Future<void> _selectAndConnectDevice() async {
-    // Request runtime permissions first
     if (!await _checkBluetoothPermissions()) {
       setState(() {
         isConnecting = false;
@@ -153,8 +152,6 @@ class _PolyautoControllerState extends State<PolyautoController>
       );
       return;
     }
-
-    // Optionally prompt to enable Bluetooth if off
     await FlutterBluetoothSerial.instance.requestEnable();
 
     setState(() {
@@ -240,17 +237,15 @@ class _PolyautoControllerState extends State<PolyautoController>
     });
   }
 
+  // Only send the 5 main commands over Bluetooth.
   void _sendCommand(String dirKey) {
-    if (isConnected && connection != null) {
+    const allowed = {'f', 'b', 'g', 'l', 's'};
+    if (isConnected && connection != null && allowed.contains(dirKey)) {
       final cmd = _directionCommand[dirKey] ?? dirKey;
       connection!.output.add(Uint8List.fromList(cmd.codeUnits));
       connection!.output.allSent;
     }
-  }
-
-  void _sendSpeed(double speed) {
-    int percent = (speed * 100).round();
-    _sendCommand('v$percent');
+    // Diagonals (q, e, z, c) are visual only: do not send to car
   }
 
   void _showSettingsDialog() {
@@ -280,21 +275,20 @@ class _PolyautoControllerState extends State<PolyautoController>
     );
   }
 
-  /// Dialog for customizing controls - FIXED VERSION
+  /// Dialog for customizing controls (all directions)
   void _showCustomizeControlsDialog() {
     showDialog(
       context: context,
       builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(20), // Add padding around dialog
+        insetPadding: const EdgeInsets.all(20),
         child: Container(
           width: double.maxFinite,
           constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.7, // Limit height to 70%
+            maxHeight: MediaQuery.of(context).size.height * 0.7,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Header
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -323,8 +317,6 @@ class _PolyautoControllerState extends State<PolyautoController>
                   ],
                 ),
               ),
-
-              // Content
               Flexible(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.all(16),
@@ -333,7 +325,8 @@ class _PolyautoControllerState extends State<PolyautoController>
                     children: [
                       const Text(
                         "Change which character is sent for each direction.\n"
-                            "For example: set Forward to 'T' to send 'T' for Forward.",
+                            "For example: set Forward to 'T' to send 'T' for Forward.\n"
+                            "Note: Only the 5 main commands (Forward, Backward, Left, Right, Stop) are sent to the car. Diagonals are visual only.",
                         style: TextStyle(fontSize: 14, color: Colors.grey),
                       ),
                       const SizedBox(height: 16),
@@ -360,10 +353,10 @@ class _PolyautoControllerState extends State<PolyautoController>
       case 'g': label = 'Left'; break;
       case 'l': label = 'Right'; break;
       case 's': label = 'Stop'; break;
-      case 'q': label = 'Forward-Left'; break;
-      case 'e': label = 'Forward-Right'; break;
-      case 'z': label = 'Backward-Left'; break;
-      case 'c': label = 'Backward-Right'; break;
+      case 'q': label = 'Forward-Left (visual)'; break;
+      case 'e': label = 'Forward-Right (visual)'; break;
+      case 'z': label = 'Backward-Left (visual)'; break;
+      case 'c': label = 'Backward-Right (visual)'; break;
       default: label = dirKey; break;
     }
 
@@ -400,7 +393,7 @@ class _PolyautoControllerState extends State<PolyautoController>
                   setState(() {
                     _directionCommand[dirKey] = val[0];
                   });
-                  _saveControlChange(dirKey, val[0]); // Save immediately when changed
+                  _saveControlChange(dirKey, val[0]);
                 }
               },
             ),
@@ -427,7 +420,7 @@ class _PolyautoControllerState extends State<PolyautoController>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      resizeToAvoidBottomInset: false, // This prevents UI compression when keyboard opens
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           Positioned.fill(
@@ -435,7 +428,7 @@ class _PolyautoControllerState extends State<PolyautoController>
               child: Opacity(
                 opacity: 0.13,
                 child: Image.asset(
-                  "assets/images/back1.png", // << your transparent logo!
+                  "assets/images/back1.png",
                   fit: BoxFit.contain,
                   width: MediaQuery.of(context).size.width * 0.75,
                 ),
@@ -596,7 +589,7 @@ class _PolyautoControllerState extends State<PolyautoController>
             ],
           ),
           const Spacer(),
-          // Speed control!
+          // Speed control! (Visual only)
           Row(
             children: [
               const Icon(Icons.speed, color: Colors.black, size: 24),
@@ -616,7 +609,6 @@ class _PolyautoControllerState extends State<PolyautoController>
                     value: _speed,
                     onChanged: (v) {
                       setState(() => _speed = v);
-                      if (isConnected) _sendSpeed(_speed);
                     },
                     min: 0,
                     max: 1,
@@ -659,7 +651,7 @@ class _PolyautoControllerState extends State<PolyautoController>
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Icon(
-                Icons.edit, // You can use Icons.tune, Icons.gamepad, etc
+                Icons.edit,
                 color: Colors.black,
                 size: 24,
               ),
@@ -732,38 +724,38 @@ class _PolyautoControllerState extends State<PolyautoController>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-          Expanded(
-          child: Container(
-          width: size,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(18),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
+              Expanded(
+                child: Container(
+                  width: size,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                    border: Border.all(color: Colors.black, width: 2),
+                  ),
+                  child: Center(
+                    child: Icon(icon, color: Colors.black, size: 44),
+                  ),
+                ),
+              ),
+              if (label != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
-              border: Border.all(color: Colors.black, width: 2),
-            ),
-            child: Center(
-              child: Icon(icon, color: Colors.black, size: 44),
-            ),
+            ],
           ),
-        ),
-        if (label != null) ...[
-        const SizedBox(height: 8),
-        Text(
-        label,
-        style: const TextStyle(
-        color: Colors.black,
-        fontWeight: FontWeight.bold,
-        ),
-        ),
-
-        ],
-        ]),
         );
       },
     );
